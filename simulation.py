@@ -106,8 +106,11 @@ class TradingSimulation:
             margin_used = 0.0
 
             # Check Stop Out first if position is open
-            if position == 'LONG':
-                floating_profit = (price - entry_price) * self.lot_size * self.contract_size
+            if position == 'SHORT':
+                # For SHORT: Profit = (Entry - Price) * Lots * Contract
+                floating_profit = (entry_price - price) * self.lot_size * self.contract_size
+                # Margin calculation is same for Short: (Price * Lots * Contract) / Leverage
+                # Usually based on Entry Price
                 margin_used = (entry_price * self.lot_size * self.contract_size) / self.leverage
 
                 equity_check = self.balance + floating_profit
@@ -123,7 +126,7 @@ class TradingSimulation:
                             'entry_price': round(entry_price, 2),
                             'exit_price': round(price, 2),
                             'profit': round(profit, 2),
-                            'type': 'LONG (STOP OUT)'
+                            'type': 'SHORT (STOP OUT)'
                         })
                         position = None
                         floating_profit = 0.0
@@ -131,18 +134,17 @@ class TradingSimulation:
 
             # Execute Strategy (only if still in position or looking to enter)
             if position is None:
-                if signal == 1:
+                if signal == -1: # Enter SHORT on Signal -1
                     # Check if enough free margin
                     required_margin = (price * self.lot_size * self.contract_size) / self.leverage
                     if self.balance > required_margin:
-                        position = 'LONG'
+                        position = 'SHORT'
                         entry_price = price
                         entry_date = date_str
-            elif position == 'LONG':
-                if signal == -1:
-                    # Close Long
+            elif position == 'SHORT':
+                if signal == 1: # Close SHORT on Signal 1
                     exit_price = price
-                    profit = (exit_price - entry_price) * self.lot_size * self.contract_size
+                    profit = (entry_price - exit_price) * self.lot_size * self.contract_size
 
                     self.balance += profit
                     self.trades.append({
@@ -151,13 +153,13 @@ class TradingSimulation:
                         'entry_price': round(entry_price, 2),
                         'exit_price': round(exit_price, 2),
                         'profit': round(profit, 2),
-                        'type': 'LONG'
+                        'type': 'SHORT'
                     })
                     position = None
 
             # Recalculate metrics for this step
-            if position == 'LONG':
-                 floating_profit = (price - entry_price) * self.lot_size * self.contract_size
+            if position == 'SHORT':
+                 floating_profit = (entry_price - price) * self.lot_size * self.contract_size
                  margin_used = (entry_price * self.lot_size * self.contract_size) / self.leverage
             else:
                  floating_profit = 0.0
