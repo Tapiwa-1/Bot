@@ -24,7 +24,10 @@
         .mt5-metrics { border-top: 2px solid #eee; padding-top: 15px; margin-top: 15px; }
         .mt5-title { font-size: 1.1em; color: #555; margin-bottom: 10px; text-align: center; font-weight: bold; }
 
-        .chart-container { position: relative; height: 500px; width: 100%; margin-bottom: 20px; }
+        .ml-section { background-color: #e3f2fd; border: 1px solid #90caf9; margin-bottom: 20px; padding: 10px; border-radius: 8px; }
+        .ml-recommendation { font-size: 1.2em; font-weight: bold; color: #1565c0; text-align: center; margin-top: 5px; }
+
+        .chart-container { position: relative; height: 600px; width: 100%; margin-bottom: 20px; }
 
         table { width: 100%; border-collapse: collapse; margin-top: 20px; }
         th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
@@ -37,7 +40,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>XAUUSD Trading Bot Simulation (MT5 View)</h1>
+        <h1>XAUUSD Trading Bot Simulation (MT5 + ML)</h1>
 
         <!-- Summary Stats -->
         <div class="stats-row">
@@ -57,6 +60,12 @@
                 <h3>Total Trades</h3>
                 <p id="total-trades">Loading...</p>
             </div>
+        </div>
+
+        <!-- ML Prediction -->
+        <div class="ml-section">
+            <div class="mt5-title">Machine Learning Forecast (Next 30m)</div>
+            <div class="ml-recommendation" id="ml-recommendation">Loading...</div>
         </div>
 
         <!-- MT5 Live Metrics -->
@@ -124,6 +133,17 @@
                 document.getElementById('win-rate').innerText = data.win_rate + '%';
                 document.getElementById('total-trades').innerText = data.total_trades;
 
+                // Update ML Recommendation
+                const mlEl = document.getElementById('ml-recommendation');
+                mlEl.innerText = data.ml_recommendation;
+                if (data.ml_recommendation.includes('BUY')) {
+                    mlEl.style.color = 'green';
+                } else if (data.ml_recommendation.includes('SELL')) {
+                    mlEl.style.color = 'red';
+                } else {
+                    mlEl.style.color = 'gray';
+                }
+
                 // Update MT5 Metrics
                 document.getElementById('current-equity').innerText = '$' + data.current_equity;
                 document.getElementById('current-margin').innerText = '$' + data.current_margin;
@@ -131,10 +151,6 @@
                 document.getElementById('current-margin-level').innerText = data.current_margin_level + '%';
 
                 // Prepare Chart Data
-                // Use 'equity' from equity_curve instead of balance to show floating P/L curve if desired
-                // Or stick to balance. MT5 visual tester usually shows Balance (line) and Equity (line).
-                // I will add Equity line.
-
                 const balanceData = data.equity_curve.map(item => ({
                     x: new Date(item.date).valueOf(),
                     y: item.balance
@@ -153,13 +169,39 @@
                     c: item.close
                 }));
 
+                // Historical Prediction Line (shifted back to align with prediction time)
+                // If ml_prediction at time T is P, it means at time T the model predicted price P (for T+30m).
+                // So to visualize "what the model predicted", we should plot P at T+30m.
+                // Let's create a dataset where x = T + 30m, y = ml_prediction(T)
+                const mlHistoricalData = [];
+                data.equity_curve.forEach(item => {
+                    if (item.ml_prediction) {
+                        const predTime = new Date(item.date).valueOf() + (30 * 60 * 1000); // Shift forward 30m
+                        mlHistoricalData.push({
+                            x: predTime,
+                            y: item.ml_prediction
+                        });
+                    }
+                });
+
+                // Future Forecast (30m ahead from now)
+                const futureForecastData = data.future_forecast.map(item => ({
+                    x: new Date(item.date).valueOf(),
+                    y: item.price
+                }));
+
+                // Combine historical predictions and future forecast for a continuous line
+                const predictionLineData = [...mlHistoricalData, ...futureForecastData].sort((a, b) => a.x - b.x);
+
+
                 const ctx = document.getElementById('equityChart').getContext('2d');
 
                 if (chartInstance) {
                     chartInstance.data.datasets[0].data = balanceData;
                     chartInstance.data.datasets[1].data = equityData;
                     chartInstance.data.datasets[2].data = candleData;
-                    chartInstance.update('none'); // Update without animation for smoother polling
+                    chartInstance.data.datasets[3].data = predictionLineData;
+                    chartInstance.update('none');
                 } else {
                     chartInstance = new Chart(ctx, {
                         type: 'candlestick',
@@ -183,7 +225,7 @@
                                     data: equityData,
                                     borderColor: 'green',
                                     backgroundColor: 'green',
-                                    yAxisID: 'y_balance', // Same axis as balance
+                                    yAxisID: 'y_balance',
                                     fill: false,
                                     tension: 0.1,
                                     pointRadius: 0,
@@ -199,7 +241,22 @@
                                         up: '#26a69a',
                                         down: '#ef5350',
                                         unchanged: '#999',
-                                    }
+                                    },
+                                    order: 2
+                                },
+                                {
+                                    label: 'ML Forecast (Next 30m)',
+                                    type: 'line',
+                                    data: predictionLineData,
+                                    borderColor: '#ff9800',
+                                    backgroundColor: '#ff9800',
+                                    yAxisID: 'y_price',
+                                    fill: false,
+                                    tension: 0.4,
+                                    pointRadius: 0,
+                                    borderWidth: 2,
+                                    borderDash: [2, 2],
+                                    order: 1
                                 }
                             ]
                         },

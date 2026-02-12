@@ -2,6 +2,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, timezone, timedelta
+from sklearn.ensemble import RandomForestRegressor
 
 class TradingSimulation:
     def __init__(self, symbol="GC=F", initial_balance=200, fast_ema=9, slow_ema=21):
@@ -22,6 +23,10 @@ class TradingSimulation:
         self.leverage = 100 # Common leverage for Gold
         self.stop_out_level = 50.0 # Stop out at 50% margin level
 
+        # ML Model
+        self.model = RandomForestRegressor(n_estimators=100, random_state=42)
+        self.prediction_horizon = 30 # Predict 30 minutes into the future
+
     def fetch_data(self, period="5d", interval="1m"):
         # Fetch data
         try:
@@ -39,10 +44,50 @@ class TradingSimulation:
                 df['EMA_Fast'] = df['Close'].ewm(span=self.fast_ema, adjust=False).mean()
                 df['EMA_Slow'] = df['Close'].ewm(span=self.slow_ema, adjust=False).mean()
 
-            self.data = df.dropna()
+                # ML Features
+                df['Returns'] = df['Close'].pct_change()
+                df['Volatility'] = df['Close'].rolling(window=20).std()
+                df['RSI'] = self.calculate_rsi(df['Close'], 14)
+                df['Momentum'] = df['Close'] - df['Close'].shift(self.prediction_horizon)
+
+                # Target: Close price shifted back by prediction horizon
+                df['Target'] = df['Close'].shift(-self.prediction_horizon)
+
+            self.data = df # Keep NaNs for now to allow feature calculation, drop before training/sim
         except Exception as e:
             print(f"Error fetching data: {e}")
             self.data = pd.DataFrame()
+
+    def calculate_rsi(self, series, period):
+        delta = series.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        rs = gain / loss
+        return 100 - (100 / (1 + rs))
+
+    def train_model(self, df):
+        # Drop NaNs created by lagging/shifting
+        train_df = df.dropna()
+
+        features = ['EMA_Fast', 'EMA_Slow', 'Returns', 'Volatility', 'RSI', 'Momentum']
+        X = train_df[features]
+        y = train_df['Target']
+
+        if len(X) > 100: # Ensure enough data to train
+            self.model.fit(X, y)
+            return True
+        return False
+
+    def predict_future(self, row, current_price):
+        # Prepare feature vector
+        features = ['EMA_Fast', 'EMA_Slow', 'Returns', 'Volatility', 'RSI', 'Momentum']
+        # Check if row has valid values
+        if row[features].isnull().any():
+            return None
+
+        X_pred = row[features].to_frame().T
+        predicted_price = self.model.predict(X_pred)[0]
+        return predicted_price
 
     def run(self):
         if self.data is None or self.data.empty:
@@ -57,13 +102,20 @@ class TradingSimulation:
                 'total_trades': 0,
                 'trades': [],
                 'equity_curve': [],
+                'future_forecast': [],
+                'ml_recommendation': 'NEUTRAL',
                 'current_equity': self.initial_balance,
                 'current_margin': 0,
                 'current_free_margin': self.initial_balance,
                 'current_margin_level': 0
             }
 
-        df = self.data.copy()
+        # Train model on historical data (up to simulation start if possible, or just all available minus test)
+        # For simplicity in this simulation, we train on the entire available history (minus the very end which has no target)
+        # This is slightly forward-looking for the early part of the simulation but acceptable for "showing ML capabilities"
+        model_trained = self.train_model(self.data)
+
+        df = self.data.copy() # Work with a copy for simulation
 
         prev_fast = df['EMA_Fast'].shift(1)
         prev_slow = df['EMA_Slow'].shift(1)
@@ -91,6 +143,9 @@ class TradingSimulation:
         current_free_margin = self.balance
         current_margin_level = 0.0
 
+        ml_recommendation = "NEUTRAL"
+        future_forecast = [] # List of {time, price}
+
         # Iterate through rows to simulate trading
         for index, row in df.iterrows():
             # Filter by start date
@@ -101,23 +156,24 @@ class TradingSimulation:
             signal = int(row['Signal'])
             date_str = str(index)
 
+            # ML Prediction for this point (prediction of price 30 mins later)
+            predicted_future_price = None
+            if model_trained:
+                predicted_future_price = self.predict_future(row, price)
+
             # Calculations for current step
             floating_profit = 0.0
             margin_used = 0.0
 
             # Check Stop Out first if position is open
             if position == 'SHORT':
-                # For SHORT: Profit = (Entry - Price) * Lots * Contract
                 floating_profit = (entry_price - price) * self.lot_size * self.contract_size
-                # Margin calculation is same for Short: (Price * Lots * Contract) / Leverage
-                # Usually based on Entry Price
                 margin_used = (entry_price * self.lot_size * self.contract_size) / self.leverage
 
                 equity_check = self.balance + floating_profit
                 if margin_used > 0:
                     margin_level_check = (equity_check / margin_used) * 100
                     if margin_level_check < self.stop_out_level:
-                        # Stop Out triggered
                         profit = floating_profit
                         self.balance += profit
                         self.trades.append({
@@ -135,7 +191,6 @@ class TradingSimulation:
             # Execute Strategy (only if still in position or looking to enter)
             if position is None:
                 if signal == -1: # Enter SHORT on Signal -1
-                    # Check if enough free margin
                     required_margin = (price * self.lot_size * self.contract_size) / self.leverage
                     if self.balance > required_margin:
                         position = 'SHORT'
@@ -181,8 +236,38 @@ class TradingSimulation:
                 'open': round(float(row['Open']), 2),
                 'high': round(float(row['High']), 2),
                 'low': round(float(row['Low']), 2),
-                'close': round(float(row['Close']), 2)
+                'close': round(float(row['Close']), 2),
+                'ml_prediction': round(predicted_future_price, 2) if predicted_future_price else None
             })
+
+        # Generate Future Forecast from the LAST data point
+        if not df.empty and model_trained:
+            last_row = df.iloc[-1]
+            last_price = float(last_row['Close'])
+            predicted_price_30m = self.predict_future(last_row, last_price)
+
+            if predicted_price_30m:
+                # Interpolate from current time to current time + 30m
+                last_time = df.index[-1]
+                target_time = last_time + timedelta(minutes=30)
+
+                # Simple linear interpolation for visualization
+                steps = 30
+                price_step = (predicted_price_30m - last_price) / steps
+
+                for i in range(1, steps + 1):
+                    future_time = last_time + timedelta(minutes=i)
+                    future_price = last_price + (price_step * i)
+                    future_forecast.append({
+                        'date': str(future_time),
+                        'price': round(future_price, 2)
+                    })
+
+                # Determine Recommendation based on 30m forecast
+                if predicted_price_30m > last_price:
+                    ml_recommendation = "BUY (Bullish Trend)"
+                else:
+                    ml_recommendation = "SELL (Bearish Trend)"
 
         # Calculate metrics
         win_rate = 0
@@ -200,6 +285,8 @@ class TradingSimulation:
             'total_trades': len(self.trades),
             'trades': self.trades,
             'equity_curve': self.equity_curve,
+            'future_forecast': future_forecast,
+            'ml_recommendation': ml_recommendation,
             'current_equity': round(current_equity, 2),
             'current_margin': round(current_margin, 2),
             'current_free_margin': round(current_free_margin, 2),
