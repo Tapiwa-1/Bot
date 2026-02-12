@@ -16,7 +16,7 @@ class TradingSimulation:
         self.trades = []
         self.equity_curve = []
 
-    def fetch_data(self, period="1mo", interval="1h"):
+    def fetch_data(self, period="1mo", interval="5m"):
         # Fetch data
         df = yf.download(self.symbol, period=period, interval=interval, progress=False)
 
