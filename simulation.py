@@ -1,11 +1,14 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
+from datetime import datetime, timezone
 
 class TradingSimulation:
     def __init__(self, symbol="GC=F", initial_balance=200, fast_ema=9, slow_ema=21):
         self.symbol = symbol
         self.initial_balance = initial_balance
+        # Start trading from 2 Feb 2026 10:00 PM GMT+2 (which is 20:00 UTC)
+        self.simulation_start = datetime(2026, 2, 2, 20, 0, 0, tzinfo=timezone.utc)
         self.balance = initial_balance
         self.fast_ema = fast_ema
         self.slow_ema = slow_ema
@@ -64,6 +67,10 @@ class TradingSimulation:
 
         # Iterate through rows to simulate trading
         for index, row in df.iterrows():
+            # Filter by start date
+            if index < self.simulation_start:
+                continue
+
             price = float(row['Close'])
             signal = int(row['Signal'])
             date_str = str(index)
