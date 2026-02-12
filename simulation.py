@@ -18,10 +18,14 @@ class TradingSimulation:
         self.equity_curve = []
 
         # MT5 Parameters
-        self.lot_size = 0.01
+        self.lot_size = 0.01 # This will be overridden by dynamic sizing
         self.contract_size = 100 # Standard lot for XAUUSD is 100 oz
         self.leverage = 100 # Common leverage for Gold
         self.stop_out_level = 50.0 # Stop out at 50% margin level
+
+        # New Strategy Parameters
+        self.risk_per_trade = 0.02 # 2% of account
+        self.risk_reward = 2 # 1:2 ratio
 
         # ML Model
         self.model = RandomForestRegressor(n_estimators=100, random_state=42)
@@ -34,23 +38,19 @@ class TradingSimulation:
 
             # Handle MultiIndex columns if present
             if isinstance(df.columns, pd.MultiIndex):
-                # If we have (Price, Ticker), we can just drop the Ticker level if it's the only one
                 if len(df.columns.levels) > 1:
                      df.columns = df.columns.droplevel(1)
 
             # Ensure we have a clean DataFrame with single-level columns
-            # Calculate Indicators
             if not df.empty:
                 df['EMA_Fast'] = df['Close'].ewm(span=self.fast_ema, adjust=False).mean()
                 df['EMA_Slow'] = df['Close'].ewm(span=self.slow_ema, adjust=False).mean()
 
-                # ML Features
+                # ML Features (kept for visualization)
                 df['Returns'] = df['Close'].pct_change()
                 df['Volatility'] = df['Close'].rolling(window=20).std()
                 df['RSI'] = self.calculate_rsi(df['Close'], 14)
                 df['Momentum'] = df['Close'] - df['Close'].shift(self.prediction_horizon)
-
-                # Target: Close price shifted back by prediction horizon
                 df['Target'] = df['Close'].shift(-self.prediction_horizon)
 
             self.data = df # Keep NaNs for now to allow feature calculation, drop before training/sim
@@ -66,28 +66,115 @@ class TradingSimulation:
         return 100 - (100 / (1 + rs))
 
     def train_model(self, df):
-        # Drop NaNs created by lagging/shifting
         train_df = df.dropna()
-
         features = ['EMA_Fast', 'EMA_Slow', 'Returns', 'Volatility', 'RSI', 'Momentum']
         X = train_df[features]
         y = train_df['Target']
-
-        if len(X) > 100: # Ensure enough data to train
+        if len(X) > 100:
             self.model.fit(X, y)
             return True
         return False
 
     def predict_future(self, row, current_price):
-        # Prepare feature vector
         features = ['EMA_Fast', 'EMA_Slow', 'Returns', 'Volatility', 'RSI', 'Momentum']
-        # Check if row has valid values
         if row[features].isnull().any():
             return None
-
         X_pred = row[features].to_frame().T
         predicted_price = self.model.predict(X_pred)[0]
         return predicted_price
+
+    # --- Candlestick Pattern Helper Functions ---
+
+    def is_hammer(self, candle):
+        body = abs(candle['Close'] - candle['Open'])
+        upper_wick = candle['High'] - max(candle['Close'], candle['Open'])
+        lower_wick = min(candle['Close'], candle['Open']) - candle['Low']
+        return lower_wick > 2 * body and upper_wick < 0.5 * body
+
+    def is_inverted_hammer(self, candle):
+        body = abs(candle['Close'] - candle['Open'])
+        upper_wick = candle['High'] - max(candle['Close'], candle['Open'])
+        lower_wick = min(candle['Close'], candle['Open']) - candle['Low']
+        return upper_wick > 2 * body and lower_wick < 0.5 * body
+
+    def is_shooting_star(self, candle):
+        return self.is_inverted_hammer(candle) # Same shape, context matters
+
+    def is_hanging_man(self, candle):
+        return self.is_hammer(candle) # Same shape, context matters
+
+    def is_bullish_engulfing(self, prev, curr):
+        if prev['Close'] < prev['Open'] and curr['Close'] > curr['Open']: # Prev red, Curr green
+            return curr['Open'] <= prev['Close'] and curr['Close'] >= prev['Open']
+        return False
+
+    def is_bearish_engulfing(self, prev, curr):
+        if prev['Close'] > prev['Open'] and curr['Close'] < curr['Open']: # Prev green, Curr red
+            return curr['Open'] >= prev['Close'] and curr['Close'] <= prev['Open']
+        return False
+
+    def is_morning_star(self, c1, c2, c3):
+        # 1: Long red
+        # 2: Small body (gap down usually, but simplified here)
+        # 3: Long green closing well into 1
+        is_c1_bearish = c1['Close'] < c1['Open'] and abs(c1['Close'] - c1['Open']) > (c1['High'] - c1['Low']) * 0.5
+        is_c2_small = abs(c2['Close'] - c2['Open']) < (c2['High'] - c2['Low']) * 0.3
+        is_c3_bullish = c3['Close'] > c3['Open'] and c3['Close'] > (c1['Open'] + c1['Close']) / 2
+        return is_c1_bearish and is_c2_small and is_c3_bullish
+
+    def is_evening_star(self, c1, c2, c3):
+        # 1: Long green
+        # 2: Small body
+        # 3: Long red closing well into 1
+        is_c1_bullish = c1['Close'] > c1['Open'] and abs(c1['Close'] - c1['Open']) > (c1['High'] - c1['Low']) * 0.5
+        is_c2_small = abs(c2['Close'] - c2['Open']) < (c2['High'] - c2['Low']) * 0.3
+        is_c3_bearish = c3['Close'] < c3['Open'] and c3['Close'] < (c1['Open'] + c1['Close']) / 2
+        return is_c1_bullish and is_c2_small and is_c3_bearish
+
+    def is_doji(self, candle):
+        body = abs(candle['Close'] - candle['Open'])
+        total_range = candle['High'] - candle['Low']
+        return body < 0.1 * total_range
+
+    def detect_pattern(self, candles):
+        if len(candles) < 3: return None
+        c1, c2, c3 = candles[-3], candles[-2], candles[-1]
+
+        # Check Trend (using EMA_Slow of c2/c1)
+        trend_c1 = 'down' if c1['Close'] < c1['EMA_Slow'] else 'up'
+        trend_c2 = 'down' if c2['Close'] < c2['EMA_Slow'] else 'up'
+
+        # Single candle patterns (on c2 usually, or c3 as strictly most recent confirmed?)
+        # Let's follow the prompt: "Extract last 3 candles: c1, c2, c3".
+        # Patterns on c2 (confirmed by c3? No, c3 is pattern part or pattern end).
+        # Prompt says: "c1, c2, c3 = candles[-3], candles[-2], candles[-1]"
+        # "Hammer(c2) and trend_is_down(c2)" -> Buy
+
+        # Hammer / Inverted Hammer (Buy)
+        if self.is_hammer(c2) and trend_c2 == 'down': return 'buy'
+        if self.is_inverted_hammer(c2) and trend_c2 == 'down': return 'buy'
+
+        # Shooting Star / Hanging Man (Sell)
+        if self.is_shooting_star(c2) and trend_c2 == 'up': return 'sell'
+        if self.is_hanging_man(c2) and trend_c2 == 'up': return 'sell'
+
+        # Engulfing (c1, c2)
+        if self.is_bullish_engulfing(c1, c2) and trend_c1 == 'down': return 'buy'
+        if self.is_bearish_engulfing(c1, c2) and trend_c1 == 'up': return 'sell'
+
+        # Morning/Evening Star (c1, c2, c3)
+        if self.is_morning_star(c1, c2, c3) and trend_c1 == 'down': return 'buy'
+        if self.is_evening_star(c1, c2, c3) and trend_c1 == 'up': return 'sell'
+
+        # Doji
+        if self.is_doji(c2): return 'wait_for_confirmation'
+
+        return None
+
+    def confirm_signal(self, pattern, next_candle):
+        if pattern == 'buy' and next_candle['Close'] > next_candle['Open']: return True
+        if pattern == 'sell' and next_candle['Close'] < next_candle['Open']: return True
+        return False
 
     def run(self):
         if self.data is None or self.data.empty:
@@ -110,29 +197,14 @@ class TradingSimulation:
                 'current_margin_level': 0
             }
 
-        # Train model on historical data (up to simulation start if possible, or just all available minus test)
-        # For simplicity in this simulation, we train on the entire available history (minus the very end which has no target)
-        # This is slightly forward-looking for the early part of the simulation but acceptable for "showing ML capabilities"
+        # Train ML Model (keep it running for visualization)
         model_trained = self.train_model(self.data)
 
-        df = self.data.copy() # Work with a copy for simulation
+        df = self.data.copy()
 
-        prev_fast = df['EMA_Fast'].shift(1)
-        prev_slow = df['EMA_Slow'].shift(1)
-
-        df['Signal'] = 0
-
-        # Buy Signal
-        buy_condition = (df['EMA_Fast'] > df['EMA_Slow']) & (prev_fast <= prev_slow)
-        df.loc[buy_condition, 'Signal'] = 1
-
-        # Sell Signal
-        sell_condition = (df['EMA_Fast'] < df['EMA_Slow']) & (prev_fast >= prev_slow)
-        df.loc[sell_condition, 'Signal'] = -1
-
-        position = None
-        entry_price = 0.0
-        entry_date = None
+        # Ensure sufficient history for pattern detection
+        if len(df) < 4:
+            return {'error': 'Not enough data'}
 
         self.trades = []
         self.equity_curve = []
@@ -144,117 +216,183 @@ class TradingSimulation:
         current_margin_level = 0.0
 
         ml_recommendation = "NEUTRAL"
-        future_forecast = [] # List of {time, price}
+        future_forecast = []
 
-        # Iterate through rows to simulate trading
-        for index, row in df.iterrows():
-            # Filter by start date
-            if index < self.simulation_start:
+        open_trade = None # {type, entry, sl, tp, lots, entry_time}
+
+        # Iterate through rows
+        # We need to access index i (current/confirmation), and i-1, i-2, i-3 (pattern)
+        # Start loop from index 3
+
+        candles_list = df.to_dict('records')
+        index_list = df.index.to_list()
+
+        for i in range(3, len(df)):
+            current_time = index_list[i]
+
+            # Skip if before simulation start
+            if current_time < self.simulation_start:
                 continue
 
-            price = float(row['Close'])
-            signal = int(row['Signal'])
-            date_str = str(index)
+            current_candle = candles_list[i]
+            # Add date to candle dict for easier access if needed
+            current_candle['Date'] = str(current_time)
 
-            # ML Prediction for this point (prediction of price 30 mins later)
-            predicted_future_price = None
-            if model_trained:
-                predicted_future_price = self.predict_future(row, price)
+            price = current_candle['Close']
 
-            # Calculations for current step
-            floating_profit = 0.0
-            margin_used = 0.0
+            # --- 1. Manage Open Trade ---
+            if open_trade:
+                # Check SL/TP
+                close_reason = None
+                exit_price = 0.0
 
-            # Check Stop Out first if position is open
-            if position == 'SHORT':
-                floating_profit = (entry_price - price) * self.lot_size * self.contract_size
-                margin_used = (entry_price * self.lot_size * self.contract_size) / self.leverage
+                if open_trade['type'] == 'LONG':
+                    if current_candle['Low'] <= open_trade['sl']:
+                        close_reason = 'SL'
+                        exit_price = open_trade['sl']
+                    elif current_candle['High'] >= open_trade['tp']:
+                        close_reason = 'TP'
+                        exit_price = open_trade['tp']
+                elif open_trade['type'] == 'SHORT':
+                    if current_candle['High'] >= open_trade['sl']:
+                        close_reason = 'SL'
+                        exit_price = open_trade['sl']
+                    elif current_candle['Low'] <= open_trade['tp']:
+                        close_reason = 'TP'
+                        exit_price = open_trade['tp']
 
-                equity_check = self.balance + floating_profit
-                if margin_used > 0:
-                    margin_level_check = (equity_check / margin_used) * 100
-                    if margin_level_check < self.stop_out_level:
-                        profit = floating_profit
-                        self.balance += profit
-                        self.trades.append({
-                            'entry_date': entry_date,
-                            'exit_date': date_str,
-                            'entry_price': round(entry_price, 2),
-                            'exit_price': round(price, 2),
-                            'profit': round(profit, 2),
-                            'type': 'SHORT (STOP OUT)'
-                        })
-                        position = None
-                        floating_profit = 0.0
-                        margin_used = 0.0
-
-            # Execute Strategy (only if still in position or looking to enter)
-            if position is None:
-                if signal == -1: # Enter SHORT on Signal -1
-                    required_margin = (price * self.lot_size * self.contract_size) / self.leverage
-                    if self.balance > required_margin:
-                        position = 'SHORT'
-                        entry_price = price
-                        entry_date = date_str
-            elif position == 'SHORT':
-                if signal == 1: # Close SHORT on Signal 1
-                    exit_price = price
-                    profit = (entry_price - exit_price) * self.lot_size * self.contract_size
+                # Execute Close
+                if close_reason:
+                    profit = 0
+                    if open_trade['type'] == 'LONG':
+                        profit = (exit_price - open_trade['entry']) * open_trade['lots'] * self.contract_size
+                    else:
+                        profit = (open_trade['entry'] - exit_price) * open_trade['lots'] * self.contract_size
 
                     self.balance += profit
                     self.trades.append({
-                        'entry_date': entry_date,
-                        'exit_date': date_str,
-                        'entry_price': round(entry_price, 2),
+                        'entry_date': open_trade['entry_time'],
+                        'exit_date': str(current_time),
+                        'entry_price': round(open_trade['entry'], 2),
                         'exit_price': round(exit_price, 2),
                         'profit': round(profit, 2),
-                        'type': 'SHORT'
+                        'type': f"{open_trade['type']} ({close_reason})"
                     })
-                    position = None
+                    open_trade = None
 
-            # Recalculate metrics for this step
-            if position == 'SHORT':
-                 floating_profit = (entry_price - price) * self.lot_size * self.contract_size
-                 margin_used = (entry_price * self.lot_size * self.contract_size) / self.leverage
-            else:
-                 floating_profit = 0.0
-                 margin_used = 0.0
+            # --- 2. Check for New Trade (if no open trade) ---
+            if open_trade is None:
+                # Get pattern window: i-3, i-2, i-1
+                # Note: 'candles_list' is 0-indexed.
+                # pattern_window = [candles_list[i-3], candles_list[i-2], candles_list[i-1]]
+                # wait, prompt says: "detect_pattern(candles[-3:])" where candles is passed in loop
+                # loop i range(3, len). candles = df[i-3:i].
+                # So if i=3, candles are 0, 1, 2. Next candle (confirmation) is 3.
+
+                pattern_window = [candles_list[i-3], candles_list[i-2], candles_list[i-1]]
+                pattern = self.detect_pattern(pattern_window)
+
+                if pattern in ['buy', 'sell']:
+                    # Confirm with current candle (i)
+                    if self.confirm_signal(pattern, current_candle):
+                        # Generate Trade
+                        entry_price = current_candle['Close']
+                        sl = 0.0
+                        tp = 0.0
+                        trade_type = ''
+
+                        if pattern == 'buy':
+                            trade_type = 'LONG'
+                            sl = current_candle['Low'] # Below confirmation candle low? Prompt says "below pattern wick".
+                            # Prompt: "stop_loss = confirmation_candle['low'] # below pattern wick"
+                            # Ideally SL is below the PATTERN low, but prompt says confirmation candle low.
+                            # Wait, "below pattern wick" implies looking at the pattern candles.
+                            # But code snippet provided: `stop_loss = confirmation_candle['low']`
+                            # I will follow the explicit code snippet.
+                            sl = current_candle['Low']
+                            risk = entry_price - sl
+                            if risk <= 0: risk = 0.01 # Safety
+                            tp = entry_price + (risk * self.risk_reward)
+
+                        elif pattern == 'sell':
+                            trade_type = 'SHORT'
+                            sl = current_candle['High']
+                            risk = sl - entry_price
+                            if risk <= 0: risk = 0.01
+                            tp = entry_price - (risk * self.risk_reward)
+
+                        # Calculate Position Size (Risk 2%)
+                        risk_amount = self.balance * self.risk_per_trade
+                        # Risk per unit = |Entry - SL|
+                        risk_per_unit = abs(entry_price - sl)
+                        # Units = Risk Amount / Risk per unit
+                        # Lots = Units / Contract Size
+                        if risk_per_unit > 0:
+                            position_units = risk_amount / risk_per_unit
+                            lots = position_units / self.contract_size
+                            lots = round(lots, 2) # Round to 2 decimal places
+                            if lots < 0.01: lots = 0.01 # Minimum lot size
+                        else:
+                            lots = 0.01
+
+                        # Execute Entry
+                        required_margin = (entry_price * lots * self.contract_size) / self.leverage
+                        if self.balance > required_margin:
+                            open_trade = {
+                                'type': trade_type,
+                                'entry': entry_price,
+                                'sl': sl,
+                                'tp': tp,
+                                'lots': lots,
+                                'entry_time': str(current_time)
+                            }
+
+            # --- 3. Update Metrics/Equity Curve ---
+            floating_profit = 0.0
+            margin_used = 0.0
+
+            if open_trade:
+                if open_trade['type'] == 'LONG':
+                    floating_profit = (price - open_trade['entry']) * open_trade['lots'] * self.contract_size
+                    margin_used = (open_trade['entry'] * open_trade['lots'] * self.contract_size) / self.leverage
+                else:
+                    floating_profit = (open_trade['entry'] - price) * open_trade['lots'] * self.contract_size
+                    margin_used = (open_trade['entry'] * open_trade['lots'] * self.contract_size) / self.leverage
 
             current_equity = self.balance + floating_profit
             current_margin = margin_used
             current_free_margin = current_equity - current_margin
             current_margin_level = (current_equity / current_margin * 100) if current_margin > 0 else 0.0
 
+            # ML Prediction (visual)
+            predicted_future_price = None
+            if model_trained:
+                predicted_future_price = self.predict_future(pd.Series(current_candle), price)
+
             self.equity_curve.append({
-                'date': date_str,
+                'date': str(current_time),
                 'balance': round(self.balance, 2),
                 'equity': round(current_equity, 2),
                 'margin': round(current_margin, 2),
                 'free_margin': round(current_free_margin, 2),
                 'margin_level': round(current_margin_level, 2),
                 'price': round(price, 2),
-                'open': round(float(row['Open']), 2),
-                'high': round(float(row['High']), 2),
-                'low': round(float(row['Low']), 2),
-                'close': round(float(row['Close']), 2),
+                'open': round(current_candle['Open'], 2),
+                'high': round(current_candle['High'], 2),
+                'low': round(current_candle['Low'], 2),
+                'close': round(current_candle['Close'], 2),
                 'ml_prediction': round(predicted_future_price, 2) if predicted_future_price else None
             })
 
-        # Generate Future Forecast from the LAST data point
+        # --- Finalize Forecast & Summary ---
         if not df.empty and model_trained:
             last_row = df.iloc[-1]
             last_price = float(last_row['Close'])
             predicted_price_30m = self.predict_future(last_row, last_price)
-
             if predicted_price_30m:
-                # Interpolate from current time to current time + 30m
                 last_time = df.index[-1]
-                target_time = last_time + timedelta(minutes=30)
-
-                # Simple linear interpolation for visualization
                 steps = 30
                 price_step = (predicted_price_30m - last_price) / steps
-
                 for i in range(1, steps + 1):
                     future_time = last_time + timedelta(minutes=i)
                     future_price = last_price + (price_step * i)
@@ -262,14 +400,11 @@ class TradingSimulation:
                         'date': str(future_time),
                         'price': round(future_price, 2)
                     })
-
-                # Determine Recommendation based on 30m forecast
                 if predicted_price_30m > last_price:
                     ml_recommendation = "BUY (Bullish Trend)"
                 else:
                     ml_recommendation = "SELL (Bearish Trend)"
 
-        # Calculate metrics
         win_rate = 0
         if self.trades:
             winning_trades = [t for t in self.trades if t['profit'] > 0]
