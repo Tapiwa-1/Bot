@@ -144,32 +144,26 @@ class TradingSimulation:
         trend_c1 = 'down' if c1['Close'] < c1['EMA_Slow'] else 'up'
         trend_c2 = 'down' if c2['Close'] < c2['EMA_Slow'] else 'up'
 
-        # Single candle patterns (on c2 usually, or c3 as strictly most recent confirmed?)
-        # Let's follow the prompt: "Extract last 3 candles: c1, c2, c3".
-        # Patterns on c2 (confirmed by c3? No, c3 is pattern part or pattern end).
-        # Prompt says: "c1, c2, c3 = candles[-3], candles[-2], candles[-1]"
-        # "Hammer(c2) and trend_is_down(c2)" -> Buy
-
         # Hammer / Inverted Hammer (Buy)
-        if self.is_hammer(c2) and trend_c2 == 'down': return 'buy'
-        if self.is_inverted_hammer(c2) and trend_c2 == 'down': return 'buy'
+        if self.is_hammer(c2) and trend_c2 == 'down': return 'buy', 'Hammer'
+        if self.is_inverted_hammer(c2) and trend_c2 == 'down': return 'buy', 'Inverted Hammer'
 
         # Shooting Star / Hanging Man (Sell)
-        if self.is_shooting_star(c2) and trend_c2 == 'up': return 'sell'
-        if self.is_hanging_man(c2) and trend_c2 == 'up': return 'sell'
+        if self.is_shooting_star(c2) and trend_c2 == 'up': return 'sell', 'Shooting Star'
+        if self.is_hanging_man(c2) and trend_c2 == 'up': return 'sell', 'Hanging Man'
 
         # Engulfing (c1, c2)
-        if self.is_bullish_engulfing(c1, c2) and trend_c1 == 'down': return 'buy'
-        if self.is_bearish_engulfing(c1, c2) and trend_c1 == 'up': return 'sell'
+        if self.is_bullish_engulfing(c1, c2) and trend_c1 == 'down': return 'buy', 'Bullish Engulfing'
+        if self.is_bearish_engulfing(c1, c2) and trend_c1 == 'up': return 'sell', 'Bearish Engulfing'
 
         # Morning/Evening Star (c1, c2, c3)
-        if self.is_morning_star(c1, c2, c3) and trend_c1 == 'down': return 'buy'
-        if self.is_evening_star(c1, c2, c3) and trend_c1 == 'up': return 'sell'
+        if self.is_morning_star(c1, c2, c3) and trend_c1 == 'down': return 'buy', 'Morning Star'
+        if self.is_evening_star(c1, c2, c3) and trend_c1 == 'up': return 'sell', 'Evening Star'
 
         # Doji
-        if self.is_doji(c2): return 'wait_for_confirmation'
+        if self.is_doji(c2): return 'wait_for_confirmation', 'Doji'
 
-        return None
+        return None, None
 
     def confirm_signal(self, pattern, next_candle):
         if pattern == 'buy' and next_candle['Close'] > next_candle['Open']: return True
@@ -194,7 +188,8 @@ class TradingSimulation:
                 'current_equity': self.initial_balance,
                 'current_margin': 0,
                 'current_free_margin': self.initial_balance,
-                'current_margin_level': 0
+                'current_margin_level': 0,
+                'current_advice': {'action': 'WAIT', 'reason': 'No Data', 'entry': 0, 'sl': 0, 'tp': 0}
             }
 
         # Train ML Model (keep it running for visualization)
@@ -219,10 +214,7 @@ class TradingSimulation:
         future_forecast = []
 
         open_trade = None # {type, entry, sl, tp, lots, entry_time}
-
-        # Iterate through rows
-        # We need to access index i (current/confirmation), and i-1, i-2, i-3 (pattern)
-        # Start loop from index 3
+        current_advice = {}
 
         candles_list = df.to_dict('records')
         index_list = df.index.to_list()
@@ -282,15 +274,8 @@ class TradingSimulation:
 
             # --- 2. Check for New Trade (if no open trade) ---
             if open_trade is None:
-                # Get pattern window: i-3, i-2, i-1
-                # Note: 'candles_list' is 0-indexed.
-                # pattern_window = [candles_list[i-3], candles_list[i-2], candles_list[i-1]]
-                # wait, prompt says: "detect_pattern(candles[-3:])" where candles is passed in loop
-                # loop i range(3, len). candles = df[i-3:i].
-                # So if i=3, candles are 0, 1, 2. Next candle (confirmation) is 3.
-
                 pattern_window = [candles_list[i-3], candles_list[i-2], candles_list[i-1]]
-                pattern = self.detect_pattern(pattern_window)
+                pattern, pattern_name = self.detect_pattern(pattern_window)
 
                 if pattern in ['buy', 'sell']:
                     # Confirm with current candle (i)
@@ -303,15 +288,9 @@ class TradingSimulation:
 
                         if pattern == 'buy':
                             trade_type = 'LONG'
-                            sl = current_candle['Low'] # Below confirmation candle low? Prompt says "below pattern wick".
-                            # Prompt: "stop_loss = confirmation_candle['low'] # below pattern wick"
-                            # Ideally SL is below the PATTERN low, but prompt says confirmation candle low.
-                            # Wait, "below pattern wick" implies looking at the pattern candles.
-                            # But code snippet provided: `stop_loss = confirmation_candle['low']`
-                            # I will follow the explicit code snippet.
                             sl = current_candle['Low']
                             risk = entry_price - sl
-                            if risk <= 0: risk = 0.01 # Safety
+                            if risk <= 0: risk = 0.01
                             tp = entry_price + (risk * self.risk_reward)
 
                         elif pattern == 'sell':
@@ -323,15 +302,12 @@ class TradingSimulation:
 
                         # Calculate Position Size (Risk 2%)
                         risk_amount = self.balance * self.risk_per_trade
-                        # Risk per unit = |Entry - SL|
                         risk_per_unit = abs(entry_price - sl)
-                        # Units = Risk Amount / Risk per unit
-                        # Lots = Units / Contract Size
                         if risk_per_unit > 0:
                             position_units = risk_amount / risk_per_unit
                             lots = position_units / self.contract_size
-                            lots = round(lots, 2) # Round to 2 decimal places
-                            if lots < 0.01: lots = 0.01 # Minimum lot size
+                            lots = round(lots, 2)
+                            if lots < 0.01: lots = 0.01
                         else:
                             lots = 0.01
 
@@ -405,6 +381,43 @@ class TradingSimulation:
                 else:
                     ml_recommendation = "SELL (Bearish Trend)"
 
+        # --- Generate Current Advice ---
+        # Based on the state at the end of the simulation
+        if open_trade:
+             current_advice = {
+                 'action': 'HOLD',
+                 'reason': f"Active {open_trade['type']} Position",
+                 'entry': round(open_trade['entry'], 2),
+                 'sl': round(open_trade['sl'], 2),
+                 'tp': round(open_trade['tp'], 2),
+                 'type': open_trade['type']
+             }
+        else:
+            # Check if a pattern is forming in the most recent completed candles
+            # Last available candles in simulation:
+            # We need to check pattern window ending at the LAST candle (index -1)
+            # This would correspond to a trade that might happen on the NEXT candle (future).
+            last_window = [candles_list[-3], candles_list[-2], candles_list[-1]]
+            pattern, pattern_name = self.detect_pattern(last_window)
+
+            if pattern:
+                current_advice = {
+                    'action': 'WATCH',
+                    'reason': f"{pattern_name} detected. Wait for confirmation.",
+                    'entry': 'Next Candle Close',
+                    'sl': 'Pending',
+                    'tp': 'Pending'
+                }
+            else:
+                current_advice = {
+                    'action': 'WAIT',
+                    'reason': 'No clear signal',
+                    'entry': '-',
+                    'sl': '-',
+                    'tp': '-'
+                }
+
+
         win_rate = 0
         if self.trades:
             winning_trades = [t for t in self.trades if t['profit'] > 0]
@@ -425,7 +438,8 @@ class TradingSimulation:
             'current_equity': round(current_equity, 2),
             'current_margin': round(current_margin, 2),
             'current_free_margin': round(current_free_margin, 2),
-            'current_margin_level': round(current_margin_level, 2)
+            'current_margin_level': round(current_margin_level, 2),
+            'current_advice': current_advice
         }
 
 if __name__ == "__main__":
@@ -433,3 +447,4 @@ if __name__ == "__main__":
     result = sim.run()
     print(f"Simulation Complete. Final Balance: {result['final_balance']}")
     print(f"Total Trades: {result['total_trades']}")
+    print(f"Advice: {result['current_advice']}")

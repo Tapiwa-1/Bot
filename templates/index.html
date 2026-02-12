@@ -27,6 +27,16 @@
         .ml-section { background-color: #e3f2fd; border: 1px solid #90caf9; margin-bottom: 20px; padding: 10px; border-radius: 8px; }
         .ml-recommendation { font-size: 1.2em; font-weight: bold; color: #1565c0; text-align: center; margin-top: 5px; }
 
+        .advice-section {
+            background-color: #fce4ec; border: 1px solid #f8bbd0; margin-bottom: 20px; padding: 15px; border-radius: 8px;
+            display: flex; justify-content: space-around; align-items: center; flex-wrap: wrap;
+        }
+        .advice-card { text-align: center; flex: 1; min-width: 200px; }
+        .advice-action { font-size: 2em; font-weight: bold; margin: 10px 0; }
+        .advice-details { font-size: 0.9em; color: #555; }
+        .advice-params { display: flex; justify-content: center; gap: 15px; margin-top: 10px; font-weight: bold; }
+        .param-box { background: rgba(255,255,255,0.7); padding: 5px 10px; border-radius: 4px; border: 1px solid #ddd; }
+
         .chart-container { position: relative; height: 600px; width: 100%; margin-bottom: 20px; }
 
         table { width: 100%; border-collapse: collapse; margin-top: 20px; }
@@ -36,6 +46,12 @@
 
         .profit-positive { color: green; }
         .profit-negative { color: red; }
+
+        .status-hold { color: #2196f3; }
+        .status-buy { color: #4caf50; }
+        .status-sell { color: #f44336; }
+        .status-wait { color: #9e9e9e; }
+        .status-watch { color: #ff9800; }
     </style>
 </head>
 <body>
@@ -62,10 +78,22 @@
             </div>
         </div>
 
-        <!-- ML Prediction -->
-        <div class="ml-section">
-            <div class="mt5-title">Machine Learning Forecast (Next 30m)</div>
-            <div class="ml-recommendation" id="ml-recommendation">Loading...</div>
+        <!-- Trading Advice Section -->
+        <div class="advice-section">
+            <div class="advice-card">
+                <div class="mt5-title">Current Trading Advice</div>
+                <div class="advice-action status-wait" id="advice-action">WAIT</div>
+                <div class="advice-details" id="advice-reason">Initializing...</div>
+                <div class="advice-params" id="advice-params" style="display: none;">
+                    <div class="param-box">Entry: <span id="advice-entry">-</span></div>
+                    <div class="param-box">SL: <span id="advice-sl">-</span></div>
+                    <div class="param-box">TP: <span id="advice-tp">-</span></div>
+                </div>
+            </div>
+             <div class="advice-card" style="border-left: 1px solid #f8bbd0;">
+                <div class="mt5-title">ML Forecast (30m)</div>
+                <div class="ml-recommendation" id="ml-recommendation">Loading...</div>
+            </div>
         </div>
 
         <!-- MT5 Live Metrics -->
@@ -136,12 +164,35 @@
                 // Update ML Recommendation
                 const mlEl = document.getElementById('ml-recommendation');
                 mlEl.innerText = data.ml_recommendation;
-                if (data.ml_recommendation.includes('BUY')) {
-                    mlEl.style.color = 'green';
-                } else if (data.ml_recommendation.includes('SELL')) {
-                    mlEl.style.color = 'red';
-                } else {
-                    mlEl.style.color = 'gray';
+                mlEl.style.color = data.ml_recommendation.includes('BUY') ? 'green' : (data.ml_recommendation.includes('SELL') ? 'red' : 'gray');
+
+                // Update Trading Advice
+                if (data.current_advice) {
+                    const advice = data.current_advice;
+                    const actionEl = document.getElementById('advice-action');
+                    const reasonEl = document.getElementById('advice-reason');
+                    const paramsEl = document.getElementById('advice-params');
+
+                    actionEl.innerText = advice.action;
+                    reasonEl.innerText = advice.reason;
+
+                    // Reset classes
+                    actionEl.className = 'advice-action';
+                    if (advice.action === 'BUY' || (advice.action === 'HOLD' && advice.type === 'LONG')) actionEl.classList.add('status-buy');
+                    else if (advice.action === 'SELL' || (advice.action === 'HOLD' && advice.type === 'SHORT')) actionEl.classList.add('status-sell');
+                    else if (advice.action === 'WATCH') actionEl.classList.add('status-watch');
+                    else if (advice.action === 'HOLD') actionEl.classList.add('status-hold');
+                    else actionEl.classList.add('status-wait');
+
+                    // Show params if relevant
+                    if (advice.action !== 'WAIT') {
+                        paramsEl.style.display = 'flex';
+                        document.getElementById('advice-entry').innerText = advice.entry;
+                        document.getElementById('advice-sl').innerText = advice.sl;
+                        document.getElementById('advice-tp').innerText = advice.tp;
+                    } else {
+                        paramsEl.style.display = 'none';
+                    }
                 }
 
                 // Update MT5 Metrics
@@ -169,10 +220,6 @@
                     c: item.close
                 }));
 
-                // Historical Prediction Line (shifted back to align with prediction time)
-                // If ml_prediction at time T is P, it means at time T the model predicted price P (for T+30m).
-                // So to visualize "what the model predicted", we should plot P at T+30m.
-                // Let's create a dataset where x = T + 30m, y = ml_prediction(T)
                 const mlHistoricalData = [];
                 data.equity_curve.forEach(item => {
                     if (item.ml_prediction) {
@@ -184,13 +231,11 @@
                     }
                 });
 
-                // Future Forecast (30m ahead from now)
                 const futureForecastData = data.future_forecast.map(item => ({
                     x: new Date(item.date).valueOf(),
                     y: item.price
                 }));
 
-                // Combine historical predictions and future forecast for a continuous line
                 const predictionLineData = [...mlHistoricalData, ...futureForecastData].sort((a, b) => a.x - b.x);
 
 
