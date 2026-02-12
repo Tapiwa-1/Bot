@@ -39,6 +39,8 @@
             </div>
         </div>
 
+        <p style="text-align: right; color: #888; font-size: 0.9em;">Last Updated: <span id="last-updated">Never</span></p>
+
         <div class="chart-container">
             <canvas id="equityChart"></canvas>
         </div>
@@ -62,8 +64,13 @@
     </div>
 
     <script>
+        let chartInstance = null;
+
         async function runSimulation() {
             try {
+                const now = new Date();
+                document.getElementById('last-updated').innerText = now.toLocaleTimeString();
+
                 const response = await fetch('/simulate');
                 const data = await response.json();
 
@@ -79,55 +86,64 @@
                 const prices = data.equity_curve.map(item => item.price);
 
                 const ctx = document.getElementById('equityChart').getContext('2d');
-                new Chart(ctx, {
-                    type: 'line',
-                    data: {
-                        labels: labels,
-                        datasets: [
-                            {
-                                label: 'Account Balance',
-                                data: equity,
-                                borderColor: 'green',
-                                yAxisID: 'y',
-                                fill: false,
-                                tension: 0.1
-                            },
-                            {
-                                label: 'Gold Price',
-                                data: prices,
-                                borderColor: 'gold',
-                                yAxisID: 'y1',
-                                fill: false,
-                                borderDash: [5, 5],
-                                tension: 0.1
-                            }
-                        ]
-                    },
-                    options: {
-                        responsive: true,
-                        interaction: {
-                            mode: 'index',
-                            intersect: false,
+
+                if (chartInstance) {
+                    chartInstance.data.labels = labels;
+                    chartInstance.data.datasets[0].data = equity;
+                    chartInstance.data.datasets[1].data = prices;
+                    chartInstance.update();
+                } else {
+                    chartInstance = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: labels,
+                            datasets: [
+                                {
+                                    label: 'Account Balance',
+                                    data: equity,
+                                    borderColor: 'green',
+                                    yAxisID: 'y',
+                                    fill: false,
+                                    tension: 0.1
+                                },
+                                {
+                                    label: 'Gold Price',
+                                    data: prices,
+                                    borderColor: 'gold',
+                                    yAxisID: 'y1',
+                                    fill: false,
+                                    borderDash: [5, 5],
+                                    tension: 0.1
+                                }
+                            ]
                         },
-                        scales: {
-                            y: {
-                                type: 'linear',
-                                display: true,
-                                position: 'left',
-                                title: { display: true, text: 'Balance ($)' }
+                        options: {
+                            animation: false,
+                            responsive: true,
+                            interaction: {
+                                mode: 'index',
+                                intersect: false,
                             },
-                            y1: {
-                                type: 'linear',
-                                display: true,
-                                position: 'right',
-                                title: { display: true, text: 'Price' },
-                                grid: {
-                                    drawOnChartArea: false
+                            scales: {
+                                y: {
+                                    type: 'linear',
+                                    display: true,
+                                    position: 'left',
+                                    title: { display: true, text: 'Balance ($)' }
+                                },
+                                y1: {
+                                    type: 'linear',
+                                    display: true,
+                                    position: 'right',
+                                    title: { display: true, text: 'Price' },
+                                    grid: {
+                                        drawOnChartArea: false
+                                    }
                                 }
                             }
                         }
-                    }
-                });
+                    });
+                }
 
                 // Update Table
                 const tableBody = document.querySelector('#trades-table tbody');
@@ -152,6 +168,7 @@
         }
 
         runSimulation();
+        setInterval(runSimulation, 5000); // Poll every 5 seconds
     </script>
 </body>
 </html>

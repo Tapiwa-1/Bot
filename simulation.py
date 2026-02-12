@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 
 class TradingSimulation:
-    def __init__(self, symbol="GC=F", initial_balance=10000, fast_ema=9, slow_ema=21):
+    def __init__(self, symbol="GC=F", initial_balance=200, fast_ema=9, slow_ema=21):
         self.symbol = symbol
         self.initial_balance = initial_balance
         self.balance = initial_balance
