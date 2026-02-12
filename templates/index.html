@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XAUUSD Simulation Bot</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        .container { max-width: 1000px; margin: 0 auto; }
+        .stats { display: flex; justify-content: space-between; margin-bottom: 20px; }
+        .stat-card { border: 1px solid #ddd; padding: 15px; border-radius: 5px; flex: 1; margin: 0 10px; text-align: center; }
+        .chart-container { position: relative; height: 400px; width: 100%; margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>XAUUSD Trading Bot Simulation</h1>
+
+        <div class="stats">
+            <div class="stat-card">
+                <h3>Initial Balance</h3>
+                <p id="initial-balance">Loading...</p>
+            </div>
+            <div class="stat-card">
+                <h3>Final Balance</h3>
+                <p id="final-balance">Loading...</p>
+            </div>
+            <div class="stat-card">
+                <h3>Total Profit</h3>
+                <p id="total-profit">Loading...</p>
+            </div>
+            <div class="stat-card">
+                <h3>Win Rate</h3>
+                <p id="win-rate">Loading...</p>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <canvas id="equityChart"></canvas>
+        </div>
+
+        <h2>Trade History</h2>
+        <table id="trades-table">
+            <thead>
+                <tr>
+                    <th>Entry Date</th>
+                    <th>Type</th>
+                    <th>Entry Price</th>
+                    <th>Exit Price</th>
+                    <th>Profit</th>
+                    <th>Exit Date</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- Trades will be populated here -->
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        async function runSimulation() {
+            try {
+                const response = await fetch('/simulate');
+                const data = await response.json();
+
+                // Update Stats
+                document.getElementById('initial-balance').innerText = '$' + data.initial_balance;
+                document.getElementById('final-balance').innerText = '$' + data.final_balance;
+                document.getElementById('total-profit').innerText = '$' + data.total_profit;
+                document.getElementById('win-rate').innerText = data.win_rate + '%';
+
+                // Update Chart
+                const labels = data.equity_curve.map(item => item.date);
+                const equity = data.equity_curve.map(item => item.balance);
+                const prices = data.equity_curve.map(item => item.price);
+
+                const ctx = document.getElementById('equityChart').getContext('2d');
+                new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: 'Account Balance',
+                                data: equity,
+                                borderColor: 'green',
+                                yAxisID: 'y',
+                                fill: false,
+                                tension: 0.1
+                            },
+                            {
+                                label: 'Gold Price',
+                                data: prices,
+                                borderColor: 'gold',
+                                yAxisID: 'y1',
+                                fill: false,
+                                borderDash: [5, 5],
+                                tension: 0.1
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        interaction: {
+                            mode: 'index',
+                            intersect: false,
+                        },
+                        scales: {
+                            y: {
+                                type: 'linear',
+                                display: true,
+                                position: 'left',
+                                title: { display: true, text: 'Balance ($)' }
+                            },
+                            y1: {
+                                type: 'linear',
+                                display: true,
+                                position: 'right',
+                                title: { display: true, text: 'Price' },
+                                grid: {
+                                    drawOnChartArea: false
+                                }
+                            }
+                        }
+                    }
+                });
+
+                // Update Table
+                const tableBody = document.querySelector('#trades-table tbody');
+                tableBody.innerHTML = '';
+                data.trades.forEach(trade => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${trade.entry_date}</td>
+                        <td>${trade.type}</td>
+                        <td>${trade.entry_price}</td>
+                        <td>${trade.exit_price}</td>
+                        <td style="color: ${trade.profit >= 0 ? 'green' : 'red'}">${trade.profit}</td>
+                        <td>${trade.exit_date}</td>
+                    `;
+                    tableBody.appendChild(row);
+                });
+
+            } catch (error) {
+                console.error('Error fetching simulation data:', error);
+                alert('Failed to load simulation. Check console for details.');
+            }
+        }
+
+        runSimulation();
+    </script>
+</body>
+</html>
