@@ -7,8 +7,9 @@ class TradingSimulation:
     def __init__(self, symbol="GC=F", initial_balance=200, fast_ema=9, slow_ema=21):
         self.symbol = symbol
         self.initial_balance = initial_balance
-        # Start trading from 2 Feb 2026 10:00 PM GMT+2 (which is 20:00 UTC)
-        self.simulation_start = datetime(2026, 2, 2, 20, 0, 0, tzinfo=timezone.utc)
+        # Start trading from Today Now (Harare Time: UTC+2)
+        # Current time is roughly 2026-02-12 20:40:00 UTC (22:40 Harare)
+        self.simulation_start = datetime(2026, 2, 12, 20, 40, 0, tzinfo=timezone.utc)
         self.balance = initial_balance
         self.fast_ema = fast_ema
         self.slow_ema = slow_ema
