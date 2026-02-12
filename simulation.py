@@ -1,15 +1,14 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 class TradingSimulation:
     def __init__(self, symbol="GC=F", initial_balance=200, fast_ema=9, slow_ema=21):
         self.symbol = symbol
         self.initial_balance = initial_balance
-        # Start trading from Today Now (Harare Time: UTC+2)
-        # Current time is roughly 2026-02-12 20:40:00 UTC (22:40 Harare)
-        self.simulation_start = datetime(2026, 2, 12, 20, 40, 0, tzinfo=timezone.utc)
+        # Start trading from 2 hours ago to show recent activity
+        self.simulation_start = datetime.now(timezone.utc) - timedelta(hours=2)
         self.balance = initial_balance
         self.fast_ema = fast_ema
         self.slow_ema = slow_ema
@@ -17,7 +16,7 @@ class TradingSimulation:
         self.trades = []
         self.equity_curve = []
 
-    def fetch_data(self, period="1mo", interval="5m"):
+    def fetch_data(self, period="5d", interval="1m"):
         # Fetch data
         df = yf.download(self.symbol, period=period, interval=interval, progress=False)
 
@@ -106,7 +105,11 @@ class TradingSimulation:
             self.equity_curve.append({
                 'date': date_str,
                 'balance': round(self.balance, 2),
-                'price': round(price, 2)
+                'price': round(price, 2),
+                'open': round(float(row['Open']), 2),
+                'high': round(float(row['High']), 2),
+                'low': round(float(row['Low']), 2),
+                'close': round(float(row['Close']), 2)
             })
 
         # Calculate metrics
