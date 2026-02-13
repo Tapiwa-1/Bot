@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EURGBP Simulation Bot</title>
+    <title>EURGBP Trading Bot Simulation (MT5 + ML)</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/luxon@2.5.0/build/global/luxon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.2.0/dist/chartjs-adapter-luxon.min.js"></script>
@@ -20,6 +20,11 @@
         }
         .stat-card h3 { margin-top: 0; font-size: 0.9em; color: #666; }
         .stat-card p { font-size: 1.2em; font-weight: bold; margin: 5px 0 0; color: #333; }
+
+        .price-card {
+            background: #e0f7fa; border: 1px solid #b2ebf2;
+        }
+        .price-card p { color: #006064; font-size: 1.5em; }
 
         .mt5-metrics { border-top: 2px solid #eee; padding-top: 15px; margin-top: 15px; }
         .mt5-title { font-size: 1.1em; color: #555; margin-bottom: 10px; text-align: center; font-weight: bold; }
@@ -64,6 +69,10 @@
 
         <!-- Summary Stats -->
         <div class="stats-row">
+            <div class="stat-card price-card">
+                <h3>Current Price</h3>
+                <p id="current-price">Loading...</p>
+            </div>
             <div class="stat-card">
                 <h3>Initial Balance (GBP)</h3>
                 <p id="initial-balance">Loading...</p>
@@ -159,6 +168,11 @@
 
                 const now = new Date();
                 document.getElementById('last-updated').innerText = now.toLocaleTimeString();
+
+                // Update Current Price
+                if (data.current_price) {
+                    document.getElementById('current-price').innerText = data.current_price.toFixed(5);
+                }
 
                 // Update Summary Stats
                 document.getElementById('initial-balance').innerText = CURRENCY_SYMBOL + data.initial_balance.toFixed(2);

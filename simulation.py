@@ -191,7 +191,8 @@ class TradingSimulation:
                 'current_margin': 0,
                 'current_free_margin': self.initial_balance,
                 'current_margin_level': 0,
-                'current_advice': {'action': 'WAIT', 'reason': 'No Data', 'entry': 0, 'sl': 0, 'tp': 0}
+                'current_advice': {'action': 'WAIT', 'reason': 'No Data', 'entry': 0, 'sl': 0, 'tp': 0},
+                'current_price': 0
             }
 
         # Train ML Model (keep it running for visualization)
@@ -217,6 +218,7 @@ class TradingSimulation:
 
         open_trade = None # {type, entry, sl, tp, lots, entry_time}
         current_advice = {}
+        last_close_price = 0.0
 
         candles_list = df.to_dict('records')
         index_list = df.index.to_list()
@@ -233,6 +235,7 @@ class TradingSimulation:
             current_candle['Date'] = str(current_time)
 
             price = current_candle['Close']
+            last_close_price = price # Track last price
 
             # --- 1. Manage Open Trade ---
             if open_trade:
@@ -320,14 +323,6 @@ class TradingSimulation:
 
                         # Execute Entry
                         required_margin = (entry_price * lots * self.contract_size) / self.leverage
-                        # Wait, Margin for EURGBP is in Base Currency (EUR).
-                        # Need to convert to Account Currency (GBP).
-                        # EUR/GBP rate is entry_price.
-                        # So Margin in GBP = (Lots * Contract Size * Rate) / Leverage * Rate? No.
-                        # Margin in Base (EUR) = Lots * Contract Size / Leverage.
-                        # Convert EUR to GBP -> Multiply by EURGBP rate (entry_price).
-                        # So Required Margin (GBP) = (Lots * Contract * EntryPrice) / Leverage.
-                        # This matches the previous logic exactly, so no change needed.
 
                         if self.balance > required_margin:
                             open_trade = {
@@ -450,7 +445,8 @@ class TradingSimulation:
             'current_margin': round(current_margin, 2),
             'current_free_margin': round(current_free_margin, 2),
             'current_margin_level': round(current_margin_level, 2),
-            'current_advice': current_advice
+            'current_advice': current_advice,
+            'current_price': round(last_close_price, 5)
         }
 
 if __name__ == "__main__":
