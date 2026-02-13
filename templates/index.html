@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>XAUUSD Simulation Bot</title>
+    <title>EURGBP Simulation Bot</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/luxon@2.5.0/build/global/luxon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.2.0/dist/chartjs-adapter-luxon.min.js"></script>
@@ -60,16 +60,12 @@
 </head>
 <body>
     <div class="container">
-        <h1>XAUUSD Trading Bot Simulation (MT5 + ML)</h1>
-
-        <div class="disclaimer">
-            <strong>Note:</strong> Price data is sourced from Gold Futures (GC=F) as a proxy for XAUUSD (Spot Gold). Prices may differ slightly from Spot Gold quotes.
-        </div>
+        <h1>EURGBP Trading Bot Simulation (MT5 + ML)</h1>
 
         <!-- Summary Stats -->
         <div class="stats-row">
             <div class="stat-card">
-                <h3>Initial Balance</h3>
+                <h3>Initial Balance (GBP)</h3>
                 <p id="initial-balance">Loading...</p>
             </div>
             <div class="stat-card">
@@ -109,7 +105,7 @@
             <div class="mt5-title">Current Status (Live)</div>
             <div class="stats-row">
                 <div class="stat-card">
-                    <h3>Equity</h3>
+                    <h3>Equity (GBP)</h3>
                     <p id="current-equity">Loading...</p>
                 </div>
                 <div class="stat-card">
@@ -141,7 +137,7 @@
                     <th>Type</th>
                     <th>Entry Price</th>
                     <th>Exit Price</th>
-                    <th>Profit</th>
+                    <th>Profit (GBP)</th>
                     <th>Exit Date</th>
                 </tr>
             </thead>
@@ -153,6 +149,7 @@
 
     <script>
         let chartInstance = null;
+        const CURRENCY_SYMBOL = '£';
 
         async function updateDashboard() {
             try {
@@ -164,8 +161,8 @@
                 document.getElementById('last-updated').innerText = now.toLocaleTimeString();
 
                 // Update Summary Stats
-                document.getElementById('initial-balance').innerText = '$' + data.initial_balance.toFixed(2);
-                document.getElementById('total-profit').innerText = '$' + data.total_profit;
+                document.getElementById('initial-balance').innerText = CURRENCY_SYMBOL + data.initial_balance.toFixed(2);
+                document.getElementById('total-profit').innerText = CURRENCY_SYMBOL + data.total_profit;
                 document.getElementById('win-rate').innerText = data.win_rate + '%';
                 document.getElementById('total-trades').innerText = data.total_trades;
 
@@ -204,9 +201,9 @@
                 }
 
                 // Update MT5 Metrics
-                document.getElementById('current-equity').innerText = '$' + data.current_equity;
-                document.getElementById('current-margin').innerText = '$' + data.current_margin;
-                document.getElementById('current-free-margin').innerText = '$' + data.current_free_margin;
+                document.getElementById('current-equity').innerText = CURRENCY_SYMBOL + data.current_equity;
+                document.getElementById('current-margin').innerText = CURRENCY_SYMBOL + data.current_margin;
+                document.getElementById('current-free-margin').innerText = CURRENCY_SYMBOL + data.current_free_margin;
                 document.getElementById('current-margin-level').innerText = data.current_margin_level + '%';
 
                 // Prepare Chart Data
@@ -286,7 +283,7 @@
                                     borderDash: [5, 5]
                                 },
                                 {
-                                    label: 'Price (1m)',
+                                    label: 'EURGBP Price (1m)',
                                     type: 'candlestick',
                                     data: candleData,
                                     yAxisID: 'y_price',
@@ -338,7 +335,7 @@
                                     type: 'linear',
                                     display: true,
                                     position: 'left',
-                                    title: { display: true, text: 'Account ($)' },
+                                    title: { display: true, text: 'Account (' + CURRENCY_SYMBOL + ')', color: 'blue' },
                                     grid: {
                                         drawOnChartArea: true
                                     }
@@ -385,7 +382,7 @@
                             <td>${trade.type}</td>
                             <td>${trade.entry_price}</td>
                             <td>${trade.exit_price}</td>
-                            <td class="${profitClass}">$${trade.profit}</td>
+                            <td class="${profitClass}">${CURRENCY_SYMBOL}${trade.profit}</td>
                             <td>${new Date(trade.exit_date).toLocaleString()}</td>
                         `;
                         tableBody.appendChild(row);

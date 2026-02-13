@@ -5,7 +5,7 @@ from datetime import datetime, timezone, timedelta
 from sklearn.ensemble import RandomForestRegressor
 
 class TradingSimulation:
-    def __init__(self, symbol="GC=F", initial_balance=200, fast_ema=9, slow_ema=21):
+    def __init__(self, symbol="EURGBP=X", initial_balance=200, fast_ema=9, slow_ema=21):
         self.symbol = symbol
         self.initial_balance = initial_balance
         # Start trading from 2 hours ago to show recent activity
@@ -17,10 +17,11 @@ class TradingSimulation:
         self.trades = []
         self.equity_curve = []
 
-        # MT5 Parameters
+        # MT5 Parameters for Forex (EURGBP)
+        # Account is assumed to be in GBP for simplicity (Quote Currency)
         self.lot_size = 0.01 # This will be overridden by dynamic sizing
-        self.contract_size = 100 # Standard lot for XAUUSD is 100 oz
-        self.leverage = 100 # Common leverage for Gold
+        self.contract_size = 100000 # Standard Forex lot is 100,000 units
+        self.leverage = 100 # Common leverage
         self.stop_out_level = 50.0 # Stop out at 50% margin level
 
         # New Strategy Parameters
@@ -89,6 +90,7 @@ class TradingSimulation:
         body = abs(candle['Close'] - candle['Open'])
         upper_wick = candle['High'] - max(candle['Close'], candle['Open'])
         lower_wick = min(candle['Close'], candle['Open']) - candle['Low']
+        # Typical Hammer: small body, long lower wick (2x body), short upper wick
         return lower_wick > 2 * body and upper_wick < 0.5 * body
 
     def is_inverted_hammer(self, candle):
@@ -137,7 +139,7 @@ class TradingSimulation:
         return body < 0.1 * total_range
 
     def detect_pattern(self, candles):
-        if len(candles) < 3: return None
+        if len(candles) < 3: return None, None
         c1, c2, c3 = candles[-3], candles[-2], candles[-1]
 
         # Check Trend (using EMA_Slow of c2/c1)
@@ -265,8 +267,8 @@ class TradingSimulation:
                     self.trades.append({
                         'entry_date': open_trade['entry_time'],
                         'exit_date': str(current_time),
-                        'entry_price': round(open_trade['entry'], 2),
-                        'exit_price': round(exit_price, 2),
+                        'entry_price': round(open_trade['entry'], 5), # 5 decimals for Forex
+                        'exit_price': round(exit_price, 5),
                         'profit': round(profit, 2),
                         'type': f"{open_trade['type']} ({close_reason})"
                     })
@@ -290,22 +292,27 @@ class TradingSimulation:
                             trade_type = 'LONG'
                             sl = current_candle['Low']
                             risk = entry_price - sl
-                            if risk <= 0: risk = 0.01
+                            if risk <= 0: risk = 0.0001 # Safety
                             tp = entry_price + (risk * self.risk_reward)
 
                         elif pattern == 'sell':
                             trade_type = 'SHORT'
                             sl = current_candle['High']
                             risk = sl - entry_price
-                            if risk <= 0: risk = 0.01
+                            if risk <= 0: risk = 0.0001
                             tp = entry_price - (risk * self.risk_reward)
 
                         # Calculate Position Size (Risk 2%)
                         risk_amount = self.balance * self.risk_per_trade
-                        risk_per_unit = abs(entry_price - sl)
+                        risk_per_unit = abs(entry_price - sl) # In Price terms
+                        # Risk Value = Risk per unit * Contract Size * Lots
+                        # Lots = Risk Amount / (Risk per unit * Contract Size)
+
                         if risk_per_unit > 0:
-                            position_units = risk_amount / risk_per_unit
-                            lots = position_units / self.contract_size
+                            # Formula for Forex:
+                            # Risk per lot = Risk per unit * Contract Size
+                            risk_per_lot = risk_per_unit * self.contract_size
+                            lots = risk_amount / risk_per_lot
                             lots = round(lots, 2)
                             if lots < 0.01: lots = 0.01
                         else:
@@ -313,6 +320,15 @@ class TradingSimulation:
 
                         # Execute Entry
                         required_margin = (entry_price * lots * self.contract_size) / self.leverage
+                        # Wait, Margin for EURGBP is in Base Currency (EUR).
+                        # Need to convert to Account Currency (GBP).
+                        # EUR/GBP rate is entry_price.
+                        # So Margin in GBP = (Lots * Contract Size * Rate) / Leverage * Rate? No.
+                        # Margin in Base (EUR) = Lots * Contract Size / Leverage.
+                        # Convert EUR to GBP -> Multiply by EURGBP rate (entry_price).
+                        # So Required Margin (GBP) = (Lots * Contract * EntryPrice) / Leverage.
+                        # This matches the previous logic exactly, so no change needed.
+
                         if self.balance > required_margin:
                             open_trade = {
                                 'type': trade_type,
@@ -352,12 +368,12 @@ class TradingSimulation:
                 'margin': round(current_margin, 2),
                 'free_margin': round(current_free_margin, 2),
                 'margin_level': round(current_margin_level, 2),
-                'price': round(price, 2),
-                'open': round(current_candle['Open'], 2),
-                'high': round(current_candle['High'], 2),
-                'low': round(current_candle['Low'], 2),
-                'close': round(current_candle['Close'], 2),
-                'ml_prediction': round(predicted_future_price, 2) if predicted_future_price else None
+                'price': round(price, 5),
+                'open': round(current_candle['Open'], 5),
+                'high': round(current_candle['High'], 5),
+                'low': round(current_candle['Low'], 5),
+                'close': round(current_candle['Close'], 5),
+                'ml_prediction': round(predicted_future_price, 5) if predicted_future_price else None
             })
 
         # --- Finalize Forecast & Summary ---
@@ -374,7 +390,7 @@ class TradingSimulation:
                     future_price = last_price + (price_step * i)
                     future_forecast.append({
                         'date': str(future_time),
-                        'price': round(future_price, 2)
+                        'price': round(future_price, 5)
                     })
                 if predicted_price_30m > last_price:
                     ml_recommendation = "BUY (Bullish Trend)"
@@ -382,21 +398,16 @@ class TradingSimulation:
                     ml_recommendation = "SELL (Bearish Trend)"
 
         # --- Generate Current Advice ---
-        # Based on the state at the end of the simulation
         if open_trade:
              current_advice = {
                  'action': 'HOLD',
                  'reason': f"Active {open_trade['type']} Position",
-                 'entry': round(open_trade['entry'], 2),
-                 'sl': round(open_trade['sl'], 2),
-                 'tp': round(open_trade['tp'], 2),
+                 'entry': round(open_trade['entry'], 5),
+                 'sl': round(open_trade['sl'], 5),
+                 'tp': round(open_trade['tp'], 5),
                  'type': open_trade['type']
              }
         else:
-            # Check if a pattern is forming in the most recent completed candles
-            # Last available candles in simulation:
-            # We need to check pattern window ending at the LAST candle (index -1)
-            # This would correspond to a trade that might happen on the NEXT candle (future).
             last_window = [candles_list[-3], candles_list[-2], candles_list[-1]]
             pattern, pattern_name = self.detect_pattern(last_window)
 
